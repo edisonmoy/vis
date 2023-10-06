@@ -1,7 +1,8 @@
 {
   "dependencies": {
     "@tweenjs/tween.js": "^21.0.0",
-    "three": "^0.156.1"
+    "three": "^0.156.1",
+    "three.meshline": "^1.4.0"
   },
   "devDependencies": {
     "vite": "^4.4.9"

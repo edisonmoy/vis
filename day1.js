@@ -1,10 +1,28 @@
 import * as THREE from "three";
 import TWEEN from "@tweenjs/tween.js";
+import { MeshLine, MeshLineMaterial } from "three.meshline";
 import WebGL from "three/addons/capabilities/WebGL.js";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.120.0/examples/jsm/controls/OrbitControls.js";
 import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.120.0/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.120.0/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.120.0/examples/jsm/postprocessing/RenderPass.js";
+
+function rgbToHex(r, g, b) {
+    var hex = ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+    return parseInt(hex, 16);
+}
+
+function hexToRgb(hex) {
+    var hex = hex.toString(16);
+    var result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result
+        ? {
+              r: parseInt(result[1], 16),
+              g: parseInt(result[2], 16),
+              b: parseInt(result[3], 16),
+          }
+        : null;
+}
 
 THREE.Color.prototype.getHSV = function () {
     var rr,
@@ -91,9 +109,6 @@ composer.addPass(bloomPass);
 // Tells composer that second pass gets rendered to screen
 bloomPass.renderToScreen = true;
 
-// update positions
-// updatePositions();
-
 class HexLine {
     constructor(startX, startY, endX, endY, color, z) {
         this.startX = startX;
@@ -102,6 +117,7 @@ class HexLine {
         this.endY = endY;
         this.color = color;
         this.z = z;
+        this.width = 0.5;
         this.createLine();
     }
     getHashId() {
@@ -142,17 +158,36 @@ class HexLine {
         points.push(new THREE.Vector3(this.startX, this.startY, this.z));
         points.push(new THREE.Vector3(this.endX, this.endY, this.z));
         const geometry = new THREE.BufferGeometry().setFromPoints(points);
-        const material = new THREE.LineBasicMaterial({ color: color });
-        const line = new THREE.Line(geometry, material);
-        this.line = line;
-        // this.scene.add(line);
+        const material = new MeshLineMaterial({
+            color: this.color,
+            lineWidth: this.width,
+        });
+        const line = new MeshLine();
+        line.setGeometry(geometry);
+        const mesh = new THREE.Mesh(line, material);
+        this.line = mesh;
         return line;
     }
     changeColor(color) {
         this.color = color;
-        this.line.material = new THREE.LineBasicMaterial({ color: color });
+        this.line.material = new MeshLineMaterial({
+            color: color,
+            lineWidth: this.width,
+        });
         this.line.material.needsUpdate;
     }
+    changeThickness(width) {
+        this.width = width;
+        this.line.material = new MeshLineMaterial({
+            color: this.color,
+            lineWidth: width,
+        });
+        this.line.material.needsUpdate;
+    }
+    getWidth() {
+        return this.width;
+    }
+
     getColor() {
         return this.color;
     }
@@ -169,6 +204,40 @@ class HexLine {
         this.endX = tempX;
         this.endY = tempY;
     }
+    setCounterTs(time) {
+        this.time = time;
+    }
+    getTime() {
+        return this.time;
+    }
+}
+
+function findMidpoint(x1, x2, y1, y2) {
+    return [(x1 + x2) / 2, (y1 + y2) / 2];
+}
+
+function createSegments(x1, x2, y1, y2, n) {
+    var segments = [{ x1: x1, x2: x2, y1: y1, y2: y2 }];
+    for (var i = 0; i < n; i++) {
+        var tempSegs = [];
+        segments.forEach((e) => {
+            var midPoint = findMidpoint(e.x1, e.x2, e.y1, e.y2);
+            tempSegs.push({
+                x1: e.x1,
+                x2: midPoint[0],
+                y1: e.y1,
+                y2: midPoint[1],
+            });
+            tempSegs.push({
+                x1: midPoint[0],
+                x2: e.x2,
+                y1: midPoint[1],
+                y2: e.y2,
+            });
+        });
+        segments = tempSegs;
+    }
+    return segments;
 }
 
 const hex_points = [
@@ -180,7 +249,6 @@ const hex_points = [
     [-2, 3.5],
 ];
 let hexLines = [];
-let hexLines1 = [];
 
 const MAX_HEXES = 1;
 
@@ -191,9 +259,7 @@ let originY = 0;
 let startingX = 0,
     startingY = 0;
 let z = 0;
-let z1 = 10;
 let existingLinesSet = new Set();
-let existingLinesSet1 = new Set();
 for (let g = 0; g < 7; g++) {
     if (g == 0) {
         startingX = originX;
@@ -229,48 +295,36 @@ for (let g = 0; g < 7; g++) {
 
         var color = 0x459632;
 
-        let hexLine = new HexLine(prevX, prevY, currX, currY, color, z);
-        if (!existingLinesSet.has(hexLine.getHashId())) {
-            hexLines.push(hexLine);
-            existingLinesSet.add(hexLine.getHashId());
-        }
+        var segments = createSegments(prevX, currX, prevY, currY, 4);
 
-        hexLine = new HexLine(prevX, prevY, currX, currY, color, z1);
-        if (!existingLinesSet1.has(hexLine.getHashId())) {
-            hexLines1.push(hexLine);
-            existingLinesSet1.add(hexLine.getHashId());
-        }
+        for (var j = 0; j < segments.length; j++) {
+            const e = segments[j];
+            let hexLine = new HexLine(e.x1, e.y1, e.x2, e.y2, color, z);
 
+            if (!existingLinesSet.has(hexLine.getHashId())) {
+                hexLines.push(hexLine);
+                existingLinesSet.add(hexLine.getHashId());
+            }
+        }
         (prevX = currX), (prevY = currY);
     }
 }
 
 hexLines.forEach((x) => scene.add(x.getLine()));
-hexLines1.forEach((x) => scene.add(x.getLine()));
-
-// let her = lines[5].material.color.getHSV();
-// console.log(her);
-// console.log(her.h);
-// new TWEEN.Tween(lines[5].material.color.getHSV())
-//     .to({ h: her.h, s: her.s, v: her.v }, 200)
-//     .easing(TWEEN.Easing.Quartic.In)
-//     .onUpdate(function () {
-//         lines[5].material.color.setHSV(this.h, this.s, this.v);
-//     })
-//     .start();
 
 const randomHexIndex = Math.floor(Math.random() * hexLines.length);
 let currLine = hexLines[randomHexIndex];
 let prevLine = currLine;
 const newColor = 0xd51919;
-let originalColor = currLine.getColor();
-const MAX_ANIMATE = 100;
+let originalColor = 0x459632;
+const MAX_ANIMATE = 10000;
 let counter = 0;
+const changedLines = new Set();
 
 let clock = new THREE.Clock();
 let delta = 0;
-// 5 fps
-let interval = 1 / 5;
+// 5 fps == 1/5
+let interval = 1 / 60;
 
 function shuffle(array) {
     let currentIndex = array.length,
@@ -288,30 +342,73 @@ function shuffle(array) {
             array[currentIndex],
         ];
     }
-
     return array;
 }
+
+let notPrinted = true;
+const stepsAnimate = 16;
+
+function interpolateColors(color1, color2, steps) {
+    const colorSpectrum = [];
+    const color1RGB = hexToRgb(color1);
+    const color2RGB = hexToRgb(color2);
+    const diffR = color2RGB.r - color1RGB.r,
+        diffG = color2RGB.g - color1RGB.g,
+        diffB = color2RGB.b - color1RGB.b;
+
+    for (var i = 0; i < steps; i++) {
+        const mult = (i + 1) / steps;
+        const newR = color1RGB.r + diffR * mult,
+            newG = color1RGB.g + diffG * mult,
+            newB = color1RGB.b + diffB * mult;
+        colorSpectrum.push(rgbToHex(newR, newG, newB));
+    }
+    return colorSpectrum;
+}
+
+const colorSpectrum = interpolateColors(newColor, originalColor, stepsAnimate);
 
 function animate() {
     delta += clock.getDelta();
 
     if (delta > interval) {
         // The draw or time dependent code are here
+        if (counter == MAX_ANIMATE && notPrinted) {
+            console.log("DONE");
+            notPrinted = false;
+        }
         if (counter < MAX_ANIMATE) {
-            prevLine.changeColor(originalColor);
-            originalColor = currLine.getColor();
+            changedLines.forEach((e) => {
+                const currThickness = e.getWidth();
+                e.changeThickness(currThickness - 0.5 / stepsAnimate);
+                const countTime = counter - e.getTime();
+                const colorIdx = Math.min(countTime, colorSpectrum.length - 1);
+                e.changeColor(colorSpectrum[colorIdx]);
+                if (countTime > stepsAnimate) {
+                    changedLines.delete(e);
+                    e.changeColor(originalColor);
+                    e.changeThickness(0.5);
+                }
+            });
+            if (!changedLines.has(currLine)) {
+                currLine.setCounterTs(counter);
+                changedLines.add(currLine);
+            }
             currLine.changeColor(newColor);
+            currLine.changeThickness(1);
             const currLineEndCoords = currLine.getEndCoords();
-            // console.log(
-            //     `Currline [${currLineStartCoords}] [${currLineEndCoords}]`
-            // );
-            const shuffledLines = shuffle(hexLines);
-            for (let i = 0; i < shuffledLines.length; i++) {
-                const nextLine = shuffledLines[i];
-                // Watch out, maybe need to randomize search
+            let lines = hexLines;
+            if (counter % stepsAnimate == 0) {
+                lines = shuffle(hexLines);
+            }
+            for (let i = 0; i < lines.length; i++) {
+                const nextLine = lines[i];
                 const nextLineStartCoords = nextLine.getStartCoords();
                 const nextLineEndCoords = nextLine.getEndCoords();
-                if (currLine.getHashId() !== nextLine.getHashId()) {
+                if (
+                    currLine.getHashId() !== nextLine.getHashId() &&
+                    nextLine.getHashId() !== prevLine.getHashId()
+                ) {
                     if (
                         currLineEndCoords[0] == nextLineStartCoords[0] &&
                         currLineEndCoords[1] == nextLineStartCoords[1]
@@ -337,18 +434,12 @@ function animate() {
 
     hexLines.forEach((x) => {
         const line = x.getLine();
-        line.rotation.x += 0.005;
-        line.rotation.y += 0.006;
+        // line.rotation.x += 0.005;
+        // line.rotation.y += 0.006;
     });
-    hexLines1.forEach((x) => {
-        const line = x.getLine();
-        line.rotation.x -= 0.008;
-        line.rotation.y += 0.005;
-    });
+
     requestAnimationFrame(animate);
-
     camera.updateProjectionMatrix();
-
     renderer.render(scene, camera);
 }
 
